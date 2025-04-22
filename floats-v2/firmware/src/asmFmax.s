@@ -13,7 +13,8 @@
 .type nameStr,%gnu_unique_object
     
 /*** STUDENTS: Change the next line to your name!  **/
-nameStr: .asciz "Inigo Montoya"  
+nameStr: .asciz "Javier Ayala"  
+ 
  
 .align
 
@@ -80,7 +81,18 @@ nanValue: .word 0x7FFFFFFF
  .type initVariables,%function
 initVariables:
     /* YOUR initVariables CODE BELOW THIS LINE! Don't forget to push and pop! */
-
+    PUSH {lr}                      @ This saves LR so I can return later
+    LDR r0, =f0                    @ I start at f0
+    MOV r1, #0                     @ This is where I write zero
+    MOV r2, #15                    @ I have 15 words total
+init_loop:
+    STR r1, [r0], #4               @ I store 0 and advance the pointer
+    SUBS r2, r2, #1                @ I decrease the count
+    BNE init_loop                  @ I loop until I've zeroed 15 words
+    POP {lr}                       @ I restore LR
+    BX lr                          @ Returns to caller
+    
+    
     /* YOUR initVariables CODE ABOVE THIS LINE! Don't forget to push and pop! */
 
     
@@ -97,7 +109,12 @@ initVariables:
 .type getSignBit,%function
 getSignBit:
     /* YOUR getSignBit CODE BELOW THIS LINE! Don't forget to push and pop! */
-
+    PUSH {lr}                      @ I save LR
+    LDR r2, [r0]                   @ Loads the 32-bit pattern
+    LSR r2, r2, #31                @ Shift sign bit into bit0
+    STR r2, [r1]                   @ Now I store that bit
+    POP {lr}                       @ Restores LR
+    BX lr                          @ I return
     /* YOUR getSignBit CODE ABOVE THIS LINE! Don't forget to push and pop! */
     
 
@@ -118,7 +135,15 @@ getSignBit:
 .type getExponent,%function
 getExponent:
     /* YOUR getExponent CODE BELOW THIS LINE! Don't forget to push and pop! */
-    
+    PUSH {lr}                      @ Saves LR
+    LDR r2, [r0]                   @ This loads float bits
+    LSR r0, r2, #23                @ I shift exponent to low bits
+    AND r0, r0, #0xFF              @ masks to 8 bits rawExp
+    CMP r0, #0                     @ checks for subnormal
+    MOVEQ r1, #-126                @ I set realExp=-126 for denormals
+    SUBNE r1, r0, #127             @ else realExp = rawExp - 127
+    POP {lr}                       @ Restores LR
+    BX lr                        
     /* YOUR getExponent CODE ABOVE THIS LINE! Don't forget to push and pop! */
    
 
@@ -136,7 +161,22 @@ getExponent:
 .type getMantissa,%function
 getMantissa:
     /* YOUR getMantissa CODE BELOW THIS LINE! Don't forget to push and pop! */
-    
+    PUSH {lr}                      @ saves LR
+    LDR r2, [r0]                   @ loads float bits
+    AND r0, r2, #0x007FFFFF        @ masks out mantissa bits
+    LSR r3, r2, #23                @ gets raw exponent bits
+    AND r3, r3, #0xFF              @ masks to 8 bits
+    CMP r3, #0                     @ checks for subnormal
+    BEQ no_implied                 @ I skip if subnormal
+    CMP r3, #255                   @ I check for Inf/NaN
+    BEQ no_implied                 @ skips if special
+    ORR r1, r0, #0x00800000        @ I set the implied 1 bit
+    B done_mant                    @ I skip the no_implied code
+no_implied:
+    MOV r1, r0                     @ I keep raw mantissa for denormals/specials
+done_mant:
+    POP {lr}                       @ I restore LR
+    BX lr                   
     /* YOUR getMantissa CODE ABOVE THIS LINE! Don't forget to push and pop! */
    
 
@@ -156,7 +196,24 @@ getMantissa:
 .type asmIsZero,%function
 asmIsZero:
     /* YOUR asmIsZero CODE BELOW THIS LINE! Don't forget to push and pop! */
-BX LR    
+    PUSH {lr}                      @ saves LR
+    LDR r1, [r0]                   @ loads float bits
+    MOV r2, r1                     @ makes a copy
+    LSL r2, r2, #1                 @ drops the sign bit
+    CMP r2, #0                     @ I see if rest is zero
+    BNE not_zero                   @ branches out if not zero
+    LSR r1, r1, #31                @ this extracts sign bit
+    CMP r1, #0                     @ I check sign
+    MOVEQ r0, #1                   @ says +0 if sign=0
+    MOVNE r0, #-1                  @ says -0 if sign=1
+    B done_zero
+not_zero:
+    MOV r0, #0                     
+done_zero:
+    POP {lr}                     
+    BX lr                        
+
+
     /* YOUR asmIsZero CODE ABOVE THIS LINE! Don't forget to push and pop! */
    
 
@@ -176,7 +233,26 @@ BX LR
 .type asmIsInf,%function
 asmIsInf:
     /* YOUR asmIsInf CODE BELOW THIS LINE! Don't forget to push and pop! */
-BX LR    
+    PUSH {lr}                      @ saves LR
+    LDR r1, [r0]                   @ loads float bits
+    LSR r2, r1, #23                @ shifts exp bits
+    AND r2, r2, #0xFF              @ masks to 8 bits
+    CMP r2, #255                   @ checks for all 1s
+    BNE not_inf                    @ branches if exp!=255
+    LSL r1, r1, #9                 @ drops sign+exp bits
+    CMP r1, #0                     @ this checks mantissa bits
+    BNE not_inf                    @ I branch if mantissa!=0
+    LDR r1, [r0]                   @ reloads float bits
+    LSR r1, r1, #31                @ extracts sign bit
+    CMP r1, #0                     @ checks sign
+    MOVEQ r0, #1                   @ says +Inf
+    MOVNE r0, #-1                  @ says -Inf
+    B done_inf
+not_inf:
+    MOV r0, #0                    
+done_inf:
+    POP {lr}                       
+    BX lr                        
     /* YOUR asmIsInf CODE ABOVE THIS LINE! Don't forget to push and pop! */
    
 
@@ -215,8 +291,126 @@ where:
 asmFmax:   
 
     /* YOUR asmFmax CODE BELOW THIS LINE! VVVVVVVVVVVVVVVVVVVVV  */
-    
-BX LR    
+    PUSH {r4-r11, lr}              @ I save my used registers
+
+    @ store the two inputs
+    LDR r4, [r0]                   @ I copy f0 bits into r4
+    STR r4, =f0                    @ I write it into memory
+    LDR r5, [r1]                   @ I copy f1 bits into r5
+    STR r5, =f1                    @ I write it into memory
+
+    @ unpack f0 into sb0/storedExp0/realExp0/mant0
+    MOV r0, r4                     @ I put the bits into r0 for helper
+    BL getSignBit                  @ I get sign into sb0
+    MOV r0, r4                     @ I reload bits into r0
+    BL getExponent                 @ I get exponents into storedExp0/realExp0
+    STR r0, =storedExp0
+    STR r1, =realExp0
+    MOV r0, r4                     @ I reload for mantissa
+    BL getMantissa                 @ I get mantissa into mant0
+    STR r1, =mant0
+
+    @ unpack f1 similarly
+    MOV r0, r5
+    BL getSignBit
+    MOV r0, r5
+    BL getExponent
+    STR r0, =storedExp1
+    STR r1, =realExp1
+    MOV r0, r5
+    BL getMantissa
+    STR r1, =mant1
+
+    @ check for infinities first
+    MOV r0, r4
+    BL asmIsInf
+    CMP r0, #1
+    BEQ return_f0                  @ I pick f0 if +Inf
+    MOV r0, r5
+    BL asmIsInf
+    CMP r0, #1
+    BEQ return_f1                  @ I pick f1 if +Inf
+    MOV r0, r4
+    BL asmIsInf
+    CMP r0, #-1
+    BEQ return_f1                  @ I pick f1 if f0 is -Inf
+    MOV r0, r5
+    BL asmIsInf
+    CMP r0, #-1
+    BEQ return_f0                  @ I pick f0 if f1 is -Inf
+
+    @ now compare sign bits
+    LDR r6, =sb0
+    LDR r6, [r6]                   @ I load sign0
+    LDR r7, =sb1
+    LDR r7, [r7]                   @ I load sign1
+    CMP r6, r7                     @ I check if signs differ
+    BNE diff_sign
+
+    @ same sign, compare realExp0 vs realExp1
+    LDR r8, =realExp0
+    LDR r8, [r8]
+    LDR r9, =realExp1
+    LDR r9, [r9]
+    CMP r8, r9
+    BNE cmp_exp
+
+    @ same exponent, compare mant0 vs mant1
+    LDR r10, =mant0
+    LDR r10, [r10]
+    LDR r11, =mant1
+    LDR r11, [r11]
+    CMP r10, r11
+    BLT return_f1
+    B    return_f0
+
+diff_sign:
+    CMP r6, #0
+    BEQ return_f0                 @ I pick f0 if f0 positive & f1 negative
+    B    return_f1                @ else I pick f1
+
+cmp_exp:
+    CMP r6, #0                     @ I check sign of both (same sign)
+    BEQ exp_pos                  
+    BLT return_f0                 @ if both negative, smaller exp is larger
+    B    return_f1                
+exp_pos:
+    BGT return_f0                 @ if both positive, larger exp is larger
+    B    return_f1
+
+return_f0:
+    LDR r0, =f0
+    LDR r1, =fMax
+    LDR r2, [r0]
+    STR r2, [r1]                   @ I copy f0 bits to fMax
+    LDR r1, =sb0                  @ I copy sb0 to sbMax
+    STR r6, =sbMax
+    LDR r1, =storedExp0           @ I copy storedExp0
+    STR r8, =storedExpMax
+    LDR r1, =realExp0             @ I copy realExp0
+    STR r8, =realExpMax
+    LDR r1, =mant0                @ I copy mant0
+    STR r10, =mantMax
+    B done_fmax
+
+return_f1:
+    LDR r0, =f1
+    LDR r1, =fMax
+    LDR r2, [r0]
+    STR r2, [r1]                   @ I copy f1 bits to fMax
+    LDR r1, =sb1                  @ I copy sb1
+    STR r7, =sbMax
+    LDR r1, =storedExp1           @ I copy storedExp1
+    STR r9, =storedExpMax
+    LDR r1, =realExp1             @ I copy realExp1
+    STR r9, =realExpMax
+    LDR r1, =mant1                @ I copy mant1
+    STR r11, =mantMax
+
+done_fmax:
+    POP {r4-r11, lr}              @ I restore registers and return
+    BX lr
+
     /* YOUR asmFmax CODE ABOVE THIS LINE! ^^^^^^^^^^^^^^^^^^^^^  */
 
    
